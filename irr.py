@@ -143,8 +143,6 @@ if __name__ == '__main__':
 
     entries, errors, options = beancount.loader.load_file(args.bean, logging.info, log_errors=sys.stderr)
 
-    if not args.date_from:
-        args.date_from = datetime.date.min
     if not args.date_to:
         args.date_to = datetime.date.today()
 
