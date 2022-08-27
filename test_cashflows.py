@@ -11,7 +11,7 @@ def simplify_cashflows(cashflows: List[Cashflow]) -> List[Cashflow]:
     """For ease of comparison, strip the context from each cashflow in 'cashflows'.
 
     """
-    return [Cashflow(date=f.date, amount=f.amount, inflow_accounts=f.inflow_accounts,
+    return [Cashflow(date=f.date, amount=f.amount, kind=f.kind, inflow_accounts=f.inflow_accounts,
                      outflow_accounts=f.outflow_accounts) for f in cashflows]
 
 
@@ -56,16 +56,19 @@ class TestCashflows(unittest.TestCase):
             Cashflow(
                 date=datetime.date(2015, 12, 1),
                 amount=Decimal(1000),
+                kind='txn',
                 inflow_accounts=set(['Assets:Cash']),
             ),
             Cashflow(
                 date=datetime.date(2016, 12, 1),
                 amount=Decimal(2000),
+                kind='txn',
                 inflow_accounts=set(['Assets:Cash']),
             ),
             Cashflow(
                 date=datetime.date(2017, 12, 1),
                 amount=Decimal(-2500),
+                kind='txn',
                 outflow_accounts=set(['Assets:Cash']),
             ),
         ]
@@ -108,10 +111,12 @@ class TestCashflows(unittest.TestCase):
             Cashflow(
                 date=datetime.date(2018, 1, 1),
                 amount=Decimal(100),
+                kind='txn',
                 inflow_accounts=set(['Assets:Cash']),
             ),
             Cashflow(
                 date=datetime.date(2018, 12, 31),
+                kind='ending balance',
                 amount=Decimal(-150),
             ),
         ]
@@ -165,16 +170,19 @@ class TestCashflows(unittest.TestCase):
             Cashflow(
                 date=datetime.date(2015, 12, 1),
                 amount=Decimal('1000.00'),
+                kind='txn',
                 inflow_accounts=set(['Assets:Cash']),
             ),
             Cashflow(
                 date=datetime.date(2016, 12, 1),
                 amount=Decimal('2000.00'),
+                kind='txn',
                 inflow_accounts=set(['Assets:Cash']),
             ),
             Cashflow(
                 date=datetime.date(2018, 12, 1),
                 amount=Decimal('-3550.00'),
+                kind='txn',
                 outflow_accounts=set(['Assets:Cash']),
             ),
         ]

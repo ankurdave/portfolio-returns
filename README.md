@@ -24,7 +24,7 @@ Table of Contents
 Quick Usage
 ===========
 ```sh
-python returns.py
+python irr.py
     --account Assets:US:Vanguard
     --account Assets:US:Fidelity
     --internal Income:CapitalGainsDistribution
@@ -32,6 +32,13 @@ python returns.py
     --year 2018
     portfolio.bean
 ```
+
+```sh
+python irr.py
+    --asset-account-map '{"Assets(:.+)?": r"\g<0>", "Expenses(:.+)?:Fees(:.+)?$": r"Assets\1\2", "Income(:.+)?:(CapitalGains|Dividends|Interest|LongTermCapitalGainsDistributions|ShortTermCapitalGainsDistributions)(:.+)?$": r"Assets\1\3",}'
+    portfolio.bean
+```
+
 
 Dependencies
 ============

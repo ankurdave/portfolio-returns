@@ -2,74 +2,152 @@
 
 """
 import datetime
-import functools
 import logging
-import operator
 import re
 import dataclasses
+import collections
 
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from typing import List, Optional, Set
 
 import beancount
-from beancount.core.data import Account, Currency, Transaction
+import beancount.core
+import beancount.core.realization
 
-def add_position(p, inventory):
-    if isinstance(p, beancount.core.data.Posting):
-        inventory.add_position(p)
-    elif isinstance(p, beancount.core.data.TxnPosting):
-        inventory.add_position(p.posting)
-    else:
-        raise Exception("Not a Posting or TxnPosting", p)
-
-def is_interesting_posting(posting, interesting_accounts):
-    """ Is this posting for an account we care about? """
-    for pattern in interesting_accounts:
-        if re.match(pattern, posting.account):
-            return True
-    return False
-
-def is_internal_account(posting, internal_accounts):
-    for pattern in internal_accounts:
-        if re.match(pattern, posting.account):
-            return True
-    return False
-
-def is_interesting_entry(entry, interesting_accounts):
-    """ Do any of the postings link to any of the accounts we care about? """
-    accounts = [p.account for p in entry.postings]
-    for posting in entry.postings:
-        if is_interesting_posting(posting, interesting_accounts):
-            return True
-    return False
-
-def iter_interesting_postings(date, entries, interesting_accounts):
-    for e in entries:
-        if e.date <= date:
-            for p in e.postings:
-                if is_interesting_posting(p, interesting_accounts):
-                    yield p
-
-def get_inventory_as_of_date(date, entries, interesting_accounts):
-    inventory = beancount.core.inventory.Inventory()
-    for p in iter_interesting_postings(date, entries, interesting_accounts):
-        add_position(p, inventory)
-    return inventory
-
-def get_value_as_of(postings, date, currency, price_map, interesting_accounts):
-    inventory = get_inventory_as_of_date(date, postings, interesting_accounts)
-    balance = inventory.reduce(beancount.core.convert.convert_position, currency, price_map, date)
-    amount = balance.get_currency_units(currency)
-    return amount.number
+from beancount.core.data import Account, Amount, Currency, Transaction
+from beancount.core.prices import PriceMap
 
 @dataclasses.dataclass
 class Cashflow:
     date: datetime.date
     amount: Decimal
+    kind: str
     inflow_accounts: Set[Account] = dataclasses.field(default_factory=set)
     outflow_accounts: Set[Account] = dataclasses.field(default_factory=set)
     entry: Optional[Transaction] = None
+
+def get_asset_account(account: Account, asset_account_map: dict[re.Pattern, str]):
+    for pattern, replacement in asset_account_map.items():
+        asset_account, num_matches = pattern.subn(replacement, account)
+        if num_matches > 0:
+            return asset_account
+    return None
+
+def get_number(amount: Amount, currency: Currency):
+    if amount.currency != currency:
+        raise AssertionError(
+            f'Could not convert posting {converted} from ' +
+            f'{entry.date} on line {posting.meta["lineno"]} to {currency}.')
+    return amount.number
+
+def get_market_values_by_asset_account(
+        entries: List[Transaction], asset_account_map: dict[str, str],
+        date: Optional[datetime.date], price_map: PriceMap,
+        currency: Currency) -> dict[Account, Decimal]:
+    """Return the market value of each asset account as of the beginning of 'date'."""
+    if date is None:
+        realized = beancount.core.realization.realize(entries)
+    else:
+        realized = beancount.core.realization.realize(
+            [e for e in entries if e.date < date])
+    market_value_by_asset_account = collections.defaultdict(lambda: Decimal(0))
+    for real_account in beancount.core.realization.iter_children(realized):
+        if not beancount.core.account_types.is_account_type(
+                beancount.core.account_types.DEFAULT_ACCOUNT_TYPES.assets,
+                real_account.account):
+            continue
+        balance_asset_account = get_asset_account(real_account.account, asset_account_map)
+        if balance_asset_account is None: continue
+        inventory = beancount.core.realization.compute_balance(real_account)
+        market_value_inventory = inventory.reduce(
+            beancount.core.convert.convert_position, currency, price_map)
+        if market_value_inventory.is_empty(): continue
+        market_value = get_number(market_value_inventory.get_only_position().units, currency)
+        market_value_by_asset_account[balance_asset_account] += market_value
+    return market_value_by_asset_account
+
+def get_cashflows_by_asset_account(
+        entries: List[Transaction], asset_account_map: dict[str, str],
+        start_date_inclusive: Optional[datetime.date], end_date_inclusive: Optional[datetime.date],
+        currency: Currency) -> dict[Account, List[Cashflow]]:
+    """For each asset account, extract a series of cashflows affecting that account.
+
+    A cashflow to/from an asset account is represented by any transaction involving (1) an account
+    that maps to that asset account (using 'asset_account_map' as the mapping) and (2) an account
+    that maps to some other asset account. Positive cashflows indicate inflows, and negative
+    cashflows indicate outflows.
+
+    'asset_account_map' is a dict of regular expression patterns that must match at the beginning of
+    an account name, and the corresponding replacements. It should map each account to its
+    corresponding asset account. For example, it might map Income:Brokerage:Dividends:BND to
+    Assets:Brokerage:BND.
+
+    For each asset account, return a list of cashflows that occurred between 'start_date_inclusive'
+    and 'end_date_inclusive'. If the asset account had a balance at the beginning of
+    'start_date_inclusive', the first cashflow will represent the market value of that balance as an
+    inflow. If it had a balance at the end of 'end_date_inclusive', the last cashflow will represent
+    the market value of that balance as an outflow. The cashflows will be denominated in units of
+    'currency'.
+
+    """
+    asset_account_map = dict([(re.compile(pattern), replacement)
+                             for pattern, replacement in asset_account_map.items()])
+    price_map = beancount.core.prices.build_price_map(entries)
+    only_txns = list(beancount.core.data.filter_txns(entries))
+
+    cashflows_by_asset_account: dict(str, List[Cashflow]) = collections.defaultdict(lambda: [])
+
+    for entry in only_txns:
+        if start_date_inclusive is not None and not start_date_inclusive <= entry.date: continue
+        if end_date_inclusive is not None and not entry.date <= end_date_inclusive: continue
+
+        pending_cashflow_by_asset_account = collections.defaultdict(
+            lambda: Cashflow(date=entry.date, amount=Decimal(0), kind='txn', entry=entry))
+
+        for posting in entry.postings:
+            value = get_number(beancount.core.convert.convert_amount(
+                beancount.core.convert.get_weight(posting), currency, price_map, entry.date), currency)
+            asset_account = get_asset_account(posting.account, asset_account_map)
+            if asset_account is None: continue
+            for a in beancount.core.account.parents(asset_account):
+                pending_cashflow_by_asset_account[a].amount += value
+
+        for asset_account, cashflow in pending_cashflow_by_asset_account.items():
+            if cashflow.amount.quantize(Decimal('.01')) != 0:
+                for posting in entry.postings:
+                    posting_asset_account = get_asset_account(posting.account, asset_account_map)
+                    if (posting_asset_account is None or
+                        asset_account not in beancount.core.account.parents(posting_asset_account)):
+                        # This posting does not belong to 'asset_account', meaning it contributes to
+                        # an inflow or outflow. Record the account for ease of debugging.
+                        if beancount.core.convert.get_weight(posting).number > 0:
+                            cashflow.outflow_accounts.add(posting.account)
+                        else:
+                            cashflow.inflow_accounts.add(posting.account)
+                cashflows_by_asset_account[asset_account].append(cashflow)
+
+    # For each account, insert an initial inflow representing its market value at the beginning of
+    # 'start_date_inclusive'.
+    if start_date_inclusive is not None:
+        market_value_by_asset_account = get_market_values_by_asset_account(
+            entries, asset_account_map, start_date_inclusive, price_map, currency)
+        for asset_account, market_value in market_value_by_asset_account.items():
+            cashflow = Cashflow(date=start_date_inclusive, amount=market_value,
+                                kind='starting balance')
+            cashflows_by_asset_account[asset_account].insert(0, cashflow)
+
+    # For each account, insert a final outflow representing its market value at the end of
+    # 'end_date_inclusive'.
+    market_value_by_asset_account = get_market_values_by_asset_account(
+        entries, asset_account_map,
+        end_date_inclusive + relativedelta(days=1) if end_date_inclusive is not None else None,
+        price_map, currency)
+    for asset_account, market_value in market_value_by_asset_account.items():
+        cashflow = Cashflow(date=end_date_inclusive, amount=-market_value, kind='ending balance')
+        cashflows_by_asset_account[asset_account].append(cashflow)
+
+    return cashflows_by_asset_account
 
 def get_cashflows(entries: List[Transaction], interesting_accounts: List[str], internal_accounts:
                   List[str], date_from: Optional[datetime.date], date_to: datetime.date,
@@ -89,68 +167,12 @@ def get_cashflows(entries: List[Transaction], interesting_accounts: List[str], i
     units of 'currency'.
 
     """
-    price_map = beancount.core.prices.build_price_map(entries)
-    only_txns = beancount.core.data.filter_txns(entries)
-    interesting_txns = [txn for txn in only_txns if is_interesting_entry(txn, interesting_accounts)]
-    # pull it into a list, instead of an iterator, because we're going to reuse it several times
-    interesting_txns = list(interesting_txns)
 
-    cashflows = []
-
-    for entry in interesting_txns:
-        if date_from is not None and not date_from <= entry.date: continue
-        if not entry.date <= date_to: continue
-
-        cashflow = Decimal(0)
-        inflow_accounts = set()
-        outflow_accounts = set()
-        # Imagine an entry that looks like
-        # [Posting(account=Assets:Brokerage, amount=100),
-        #  Posting(account=Income:Dividend, amount=-100)]
-        # We want that to net out to $0
-        # But an entry like
-        # [Posting(account=Assets:Brokerage, amount=100),
-        #  Posting(account=Assets:Bank, amount=-100)]
-        # should net out to $100
-        # we loop over all postings in the entry. if the posting
-        # if for an account we care about e.g. Assets:Brokerage then
-        # we track the cashflow. But we *also* look for "internal"
-        # cashflows and subtract them out. This will leave a net $0
-        # if all the cashflows are internal.
-
-        for posting in entry.postings:
-            converted = beancount.core.convert.convert_amount(
-                beancount.core.convert.get_weight(posting), currency, price_map, entry.date)
-            if converted.currency != currency:
-                logging.error(f'Could not convert posting {converted} from {entry.date} on line {posting.meta["lineno"]} to {currency}. IRR will be wrong.')
-                continue
-            value = converted.number
-
-            if is_interesting_posting(posting, interesting_accounts):
-                cashflow += value
-            elif is_internal_account(posting, internal_accounts):
-                cashflow += value
-            else:
-                if value > 0:
-                    outflow_accounts.add(posting.account)
-                else:
-                    inflow_accounts.add(posting.account)
-        # calculate net cashflow & the date
-        if cashflow.quantize(Decimal('.01')) != 0:
-            cashflows.append(Cashflow(date=entry.date, amount=cashflow,
-                                      inflow_accounts=inflow_accounts,
-                                      outflow_accounts=outflow_accounts,
-                                      entry=entry))
-
-    if date_from is not None:
-        start_value = get_value_as_of(interesting_txns, date_from + relativedelta(days=-1),
-                                      currency, price_map, interesting_accounts)
-        # if starting balance isn't $0 at starting time period then we need a cashflow
-        if start_value != 0:
-            cashflows.insert(0, Cashflow(date=date_from, amount=start_value))
-    end_value = get_value_as_of(interesting_txns, date_to, currency, price_map, interesting_accounts)
-    # if ending balance isn't $0 at end of time period then we need a cashflow
-    if end_value != 0:
-        cashflows.append(Cashflow(date=date_to, amount=-end_value))
-
-    return cashflows
+    placeholder_asset_account = r'Assets:_AssetAccountForCashflows'
+    asset_account_map = dict((pattern, placeholder_asset_account)
+                            for pattern in interesting_accounts + internal_accounts)
+    return get_cashflows_by_asset_account(
+        entries=entries, asset_account_map=asset_account_map,
+        start_date_inclusive=date_from,
+        end_date_inclusive=date_to,
+        currency=currency)[placeholder_asset_account]

@@ -9,6 +9,7 @@ import math
 import collections
 import datetime
 import re
+from ast import literal_eval
 from decimal import Decimal
 from dateutil.relativedelta import relativedelta
 from pprint import pprint
@@ -16,13 +17,14 @@ from scipy import optimize
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Union
 import beancount.loader
 import beancount.utils
+import beancount.utils.table
 import beancount.core
 import beancount.core.getters
 import beancount.core.data
 import beancount.core.convert
 import beancount.parser
 from pprint import pprint
-from cashflows import get_cashflows
+from cashflows import get_cashflows, get_cashflows_by_asset_account
 
 # https://github.com/peliot/XIRR-and-XNPV/blob/master/financial.py
 
@@ -68,7 +70,8 @@ def xirr(cashflows,guess=0.1):
     return optimize.newton(lambda r: xnpv(r,cashflows),guess)
 
 def fmt_d(n):
-    return '${:,.0f}'.format(n)
+    if n is None: return None
+    return '${:,.2f}'.format(n)
 
 def fmt_pct(n):
     return '{0:.2f}%'.format(n*100)
@@ -83,6 +86,12 @@ if __name__ == '__main__':
     parser.add_argument('--currency', default='USD', help='Currency to use for calculating returns.')
     parser.add_argument('--account', action='append', default=[], help='Regex pattern of accounts to include when calculating returns. Can be specified multiple times.')
     parser.add_argument('--internal', action='append', default=[], help='Regex pattern of accounts that represent internal cashflows (i.e. dividends or interest)')
+
+    parser.add_argument('--asset-account-map',
+                        help='Dict[pattern, replacement] that maps each account to its ' +
+                        'corresponding asset account.')
+    parser.add_argument('--debug-asset-account-cashflows',
+                        help='Asset account for which to print all cashflow transactions.')
 
     parser.add_argument('--from', dest='date_from', type=lambda d: datetime.datetime.strptime(d, '%Y-%m-%d').date(), help='Start date: YYYY-MM-DD, 2016-12-31')
     parser.add_argument('--to', dest='date_to', type=lambda d: datetime.datetime.strptime(d, '%Y-%m-%d').date(), help='End date YYYY-MM-DD, 2016-12-31')
@@ -146,22 +155,55 @@ if __name__ == '__main__':
     if not args.date_to:
         args.date_to = datetime.date.today()
 
-    cashflows = get_cashflows(
-        entries=entries, interesting_accounts=args.account, internal_accounts=args.internal,
-        date_from=args.date_from, date_to=args.date_to, currency=args.currency)
+    if args.asset_account_map:
+        asset_account_map: Dict[str, str] = literal_eval(args.asset_account_map)
+        cashflows_by_asset_account = get_cashflows_by_asset_account(
+            entries=entries, asset_account_map=asset_account_map,
+            start_date_inclusive=args.date_from, end_date_inclusive=args.date_to,
+            currency=args.currency)
 
-    if cashflows:
-        # we need to coerce everything to a float for xirr to work...
-        r = xirr([(f.date, float(f.amount)) for f in cashflows])
-        print(fmt_pct(r))
+        if args.debug_asset_account_cashflows:
+            cashflows = cashflows_by_asset_account[args.debug_asset_account_cashflows]
+            for cashflow in cashflows:
+                print(f'{cashflow.date}: {cashflow.amount}')
+                if cashflow.kind == 'starting balance':
+                    print('(Starting balance at market value)')
+                elif cashflow.kind == 'ending balance':
+                    print('(Ending balance at market value)')
+                else:
+                    print(beancount.parser.printer.format_entry(cashflow.entry))
+
+        field_spec = [(0, 'Asset Account'), (1, 'Net Inflows'), (2, 'Market Value'), (3, 'IRR')]
+        rows = []
+        for asset_account, cashflows in sorted(cashflows_by_asset_account.items()):
+            net_inflows = sum([f.amount for f in cashflows if f.kind != 'ending balance'])
+            market_value = next((-f.amount for f in cashflows if f.kind == 'ending balance'), None)
+            try:
+                irr = fmt_pct(xirr([(f.date, float(f.amount)) for f in cashflows]))
+            except OverflowError:
+                irr = '(overflow)'
+            except RuntimeError:
+                irr = '(diverged)'
+            rows.append((asset_account, fmt_d(net_inflows), fmt_d(market_value), irr))
+        table = beancount.utils.table.create_table(rows, field_spec)
+        beancount.utils.table.render_table(table, sys.stdout, 'text')
     else:
-        logging.error(f'No cashflows found during the time period {args.date_from} -> {args.date_to}')
+        cashflows = get_cashflows(
+            entries=entries, interesting_accounts=args.account, internal_accounts=args.internal,
+            date_from=args.date_from, date_to=args.date_to, currency=args.currency)
 
-    if args.debug_cashflows:
-        pprint([(f.date, f.amount) for f in cashflows])
-    if args.debug_inflows:
-        print('>> [inflows]')
-        pprint(set().union(*[f.inflows for f in cashflows]))
-    if args.debug_outflows:
-        print('<< [outflows]')
-        pprint(set().union(*[f.outflows for f in cashflows]))
+        if cashflows:
+            # we need to coerce everything to a float for xirr to work...
+            r = xirr([(f.date, float(f.amount)) for f in cashflows])
+            print(fmt_pct(r))
+        else:
+            logging.error(f'No cashflows found during the time period {args.date_from} -> {args.date_to}')
+
+        if args.debug_cashflows:
+            pprint([(f.date, f.amount) for f in cashflows])
+        if args.debug_inflows:
+            print('>> [inflows]')
+            pprint(set().union(*[f.inflows for f in cashflows]))
+        if args.debug_outflows:
+            print('<< [outflows]')
+            pprint(set().union(*[f.outflows for f in cashflows]))
