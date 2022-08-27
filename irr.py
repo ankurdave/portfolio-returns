@@ -174,6 +174,8 @@ if __name__ == '__main__':
                     print(beancount.parser.printer.format_entry(cashflow.entry))
 
         field_spec = [(0, 'Asset Account'), (1, 'Net Inflows'), (2, 'Market Value'), (3, 'IRR')]
+        if args.debug_inflows or args.debug_outflows:
+            field_spec.extend([(4, 'Inflow Accounts'), (5, 'Outflow Accounts')])
         rows = []
         for asset_account, cashflows in sorted(cashflows_by_asset_account.items()):
             net_inflows = sum([f.amount for f in cashflows if f.kind != 'ending balance'])
@@ -184,7 +186,12 @@ if __name__ == '__main__':
                 irr = '(overflow)'
             except RuntimeError:
                 irr = '(diverged)'
-            rows.append((asset_account, fmt_d(net_inflows), fmt_d(market_value), irr))
+            inflow_accounts = set().union(*[f.inflow_accounts for f in cashflows])
+            outflow_accounts = set().union(*[f.outflow_accounts for f in cashflows])
+            row = [asset_account, fmt_d(net_inflows), fmt_d(market_value), irr]
+            if args.debug_inflows or args.debug_outflows:
+                row.extend([str(inflow_accounts)[:50], str(outflow_accounts)[:50]])
+            rows.append(tuple(row))
         table = beancount.utils.table.create_table(rows, field_spec)
         beancount.utils.table.render_table(table, sys.stdout, 'text')
     else:
