@@ -210,7 +210,7 @@ if __name__ == '__main__':
             pprint([(f.date, f.amount) for f in cashflows])
         if args.debug_inflows:
             print('>> [inflows]')
-            pprint(set().union(*[f.inflows for f in cashflows]))
+            pprint(set().union(*[f.inflow_accounts for f in cashflows]))
         if args.debug_outflows:
             print('<< [outflows]')
-            pprint(set().union(*[f.outflows for f in cashflows]))
+            pprint(set().union(*[f.outflow_accounts for f in cashflows]))
