@@ -98,6 +98,7 @@ def get_cashflows_by_asset_account(
 
     cashflows_by_asset_account: dict(str, List[Cashflow]) = collections.defaultdict(lambda: [])
 
+    # Extract cashflows from transactions.
     for entry in only_txns:
         if start_date_inclusive is not None and not start_date_inclusive <= entry.date: continue
         if end_date_inclusive is not None and not entry.date <= end_date_inclusive: continue
@@ -147,7 +148,8 @@ def get_cashflows_by_asset_account(
         cashflow = Cashflow(date=end_date_inclusive, amount=-market_value, kind='ending balance')
         cashflows_by_asset_account[asset_account].append(cashflow)
 
-    return cashflows_by_asset_account
+    # Convert the 'defaultdict' to a 'dict' to avoid causing unexpected behavior for the caller.
+    return dict(cashflows_by_asset_account)
 
 def get_cashflows(entries: List[Transaction], interesting_accounts: List[str], internal_accounts:
                   List[str], date_from: Optional[datetime.date], date_to: datetime.date,
