@@ -61,7 +61,7 @@ def get_market_values_by_asset_account(
         if balance_asset_account is None: continue
         inventory = beancount.core.realization.compute_balance(real_account)
         market_value_inventory = inventory.reduce(
-            beancount.core.convert.convert_position, currency, price_map)
+            beancount.core.convert.convert_position, currency, price_map, date)
         if market_value_inventory.is_empty(): continue
         market_value = get_number(market_value_inventory.get_only_position().units, currency)
         market_value_by_asset_account[balance_asset_account] += market_value
