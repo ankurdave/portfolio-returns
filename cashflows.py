@@ -53,9 +53,8 @@ def get_market_values_by_asset_account(
             [e for e in entries if e.date < date])
     market_value_by_asset_account = collections.defaultdict(lambda: Decimal(0))
     for real_account in beancount.core.realization.iter_children(realized):
-        if not beancount.core.account_types.is_account_type(
-                beancount.core.account_types.DEFAULT_ACCOUNT_TYPES.assets,
-                real_account.account):
+        if (not beancount.core.account_types.get_account_type(real_account.account) ==
+            beancount.core.account_types.DEFAULT_ACCOUNT_TYPES.assets):
             continue
         balance_asset_account = get_asset_account(real_account.account, asset_account_map)
         if balance_asset_account is None: continue
