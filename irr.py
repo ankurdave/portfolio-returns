@@ -88,7 +88,7 @@ if __name__ == '__main__':
     parser.add_argument('--internal', action='append', default=[], help='Regex pattern of accounts that represent internal cashflows (i.e. dividends or interest)')
 
     parser.add_argument('--asset-account-map',
-                        help='Dict[pattern, replacement] that maps each account to its ' +
+                        help='List[tuple[pattern, replacement]] that maps each account to its ' +
                         'corresponding asset account.')
     parser.add_argument('--debug-asset-account-cashflows',
                         help='Asset account for which to print all cashflow transactions.')
@@ -156,7 +156,7 @@ if __name__ == '__main__':
         args.date_to = datetime.date.today()
 
     if args.asset_account_map:
-        asset_account_map: Dict[str, str] = literal_eval(args.asset_account_map)
+        asset_account_map: List[tuple[str, str]] = literal_eval(args.asset_account_map)
         cashflows_by_asset_account = get_cashflows_by_asset_account(
             entries=entries, asset_account_map=asset_account_map,
             start_date_inclusive=args.date_from, end_date_inclusive=args.date_to,

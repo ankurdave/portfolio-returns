@@ -27,8 +27,8 @@ class Cashflow:
     outflow_accounts: Set[Account] = dataclasses.field(default_factory=set)
     entry: Optional[Transaction] = None
 
-def get_asset_account(account: Account, asset_account_map: dict[re.Pattern, str]):
-    for pattern, replacement in asset_account_map.items():
+def get_asset_account(account: Account, asset_account_map: List[tuple[re.Pattern, str]]):
+    for pattern, replacement in asset_account_map:
         asset_account, num_matches = pattern.subn(replacement, account)
         if num_matches > 0:
             return asset_account
@@ -42,7 +42,7 @@ def get_number(amount: Amount, currency: Currency):
     return amount.number
 
 def get_market_values_by_asset_account(
-        entries: List[Transaction], asset_account_map: dict[str, str],
+        entries: List[Transaction], asset_account_map: List[tuple[str, str]],
         date: Optional[datetime.date], price_map: PriceMap,
         currency: Currency) -> dict[Account, Decimal]:
     """Return the market value of each asset account as of the beginning of 'date'."""
@@ -68,7 +68,7 @@ def get_market_values_by_asset_account(
     return market_value_by_asset_account
 
 def get_cashflows_by_asset_account(
-        entries: List[Transaction], asset_account_map: dict[str, str],
+        entries: List[Transaction], asset_account_map: List[tuple[str, str]],
         start_date_inclusive: Optional[datetime.date], end_date_inclusive: Optional[datetime.date],
         currency: Currency) -> dict[Account, List[Cashflow]]:
     """For each asset account, extract a series of cashflows affecting that account.
@@ -78,7 +78,7 @@ def get_cashflows_by_asset_account(
     that maps to some other asset account. Positive cashflows indicate inflows, and negative
     cashflows indicate outflows.
 
-    'asset_account_map' is a dict of regular expression patterns that must match at the beginning of
+    'asset_account_map' is a list of regular expression patterns that must match at the beginning of
     an account name, and the corresponding replacements. It should map each account to its
     corresponding asset account. For example, it might map Income:Brokerage:Dividends:BND to
     Assets:Brokerage:BND.
@@ -91,8 +91,8 @@ def get_cashflows_by_asset_account(
     'currency'.
 
     """
-    asset_account_map = dict([(re.compile(pattern), replacement)
-                             for pattern, replacement in asset_account_map.items()])
+    asset_account_map = [(re.compile(pattern), replacement)
+                         for pattern, replacement in asset_account_map]
     price_map = beancount.core.prices.build_price_map(entries)
     only_txns = list(beancount.core.data.filter_txns(entries))
 
@@ -171,8 +171,8 @@ def get_cashflows(entries: List[Transaction], interesting_accounts: List[str], i
     """
 
     placeholder_asset_account = r'Assets:_AssetAccountForCashflows'
-    asset_account_map = dict((pattern, placeholder_asset_account)
-                            for pattern in interesting_accounts + internal_accounts)
+    asset_account_map = [(pattern, placeholder_asset_account)
+                         for pattern in interesting_accounts + internal_accounts]
     return get_cashflows_by_asset_account(
         entries=entries, asset_account_map=asset_account_map,
         start_date_inclusive=date_from,

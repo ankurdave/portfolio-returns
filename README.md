@@ -35,7 +35,7 @@ python irr.py
 
 ```sh
 python irr.py
-    --asset-account-map '{"Assets(:.+)?": r"\g<0>", "Expenses(:.+)?:Fees(:.+)?$": r"Assets\1\2", "Income(:.+)?:(CapitalGains|Dividends|Interest|LongTermCapitalGainsDistributions|ShortTermCapitalGainsDistributions)(:.+)?$": r"Assets\1\3",}'
+    --asset-account-map '[("Assets(:.+)?": r"\g<0>"), ("Expenses(:.+)?:Fees(:.+)?$": r"Assets\1\2"), ("Income(:.+)?:(CapitalGains|Dividends|Interest|LongTermCapitalGainsDistributions|ShortTermCapitalGainsDistributions)(:.+)?$": r"Assets\1\3"),]'
     portfolio.bean
 ```
 
